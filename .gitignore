@@ -1,0 +1,36 @@
+# --- Python bytecode ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# --- Virtual environment directories ---
+env/
+venv/
+.venv/
+
+# Explicit venv folders (Windows, local)
+Include/
+Lib/
+Scripts/
+share/
+pyvenv.cfg
+
+# --- Build artifacts ---
+build/
+dist/
+*.egg-info/
+*.egg
+
+# --- IDE / editor files ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+
+# --- macOS / Windows noise ---
+.DS_Store
+Thumbs.db
