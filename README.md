@@ -1,31 +1,19 @@
-# Neighbor-Joining Tree Visualizer
+# NJ Implementation and Tree Visualization
 
-Orodje za izračun in interaktivno vizualizacijo Neighbor-Joining (NJ) filogenetskih dreves iz poljubnih razdaljskih matrik ali Orange3 podatkovnih tabel.
+Orodje za izračun in interaktivno vizualizacijo filogenetskih dreves nastalih z algoritmom združevanja sosedov.
 
-- lasten **NJ algoritmični modul**
-- **Orange3 distance matrike** (Euclidean, Manhattan, Hamming)
-- interaktivno vizualizacijo:  
-  **drsnik za rezanje drevesa**, barvne gruče, hover-highlight, linijska debla, etikete
+### Funkcionalnosti
+
+- implementacija algoritma združevanja sosedov
+- implementacija izrisa nastalega drevesa
+- prikaz delovanja na:
+  - sintetičnih podatkih
+  - primerih podatkov, ki so dostopni v Orange-u
 
 
-## Funkcionalnosti
+### Struktura repozitorija
 
-- Implementacija **neighbor_joining_core** brez zunanjih odvisnosti
-- Pretvorniki: `neighbor_joining_orange()`, `to_newick()`
-- Interaktivni prikaz z barvanjem gruč in poudarjanjem z miško
-- Demo vizualizacije: Iris, Zoo, Housing in sintetične matrike
-
-## Struktura repozitorija
-
-Projekt je organiziran tako, da jasno loči:
-
-- **glavno implementacijo algoritma**
-- **prikaz in interaktivne elemente**
-- **povezave z Orange3**
-- **primere uporabe (demos)**
-
-### Glavne mape
-
+```
 repo/
 │
 ├── src/
@@ -34,67 +22,57 @@ repo/
 │ └── nj_visualization.py
 │
 ├── demos/
+│ ├── demo_synthetic_matrix.py
 │ └── demo_orange_datasets.py
+│
+├── images/
+│ └── tree_demo.png
 │
 ├── requirements.txt
 ├── .gitignore
 └── README.md
+```
 
-### Opis datotek
+### Opis map in datotek
 
 #### `src/`
 Modularni del projekta, kjer se nahaja celotna logika.
 
 - **`nj_core.py`**  
-  Čista implementacija Neighbor-Joining algoritma.  
-  Vsebuje:
-  - `TreeNode` razred  
-  - `neighbor_joining_core()`  
-  - pretvorbe (npr. `to_newick()`)  
-  - preverjanje konsistentnosti v primerjavi z BioPython / scikit-bio (če vključeno)
+  Implementacija algoritma združevanja sosedov:
+  - `TreeNode` razred
+  - `neighbor_joining_core()`
+  - `to_newick()`
 
 - **`nj_orange.py`**  
-  Povezovalni modul za uporabo Orange3 distance matrik (`DistMatrix`).  
-  Vsebuje:
+  Povezovalni modul za uporabo Orange3 matrik razdalj (`DistMatrix`):
   - `neighbor_joining_orange(dm, labels)`  
-  - obravnavo Orange datasetov
 
 - **`nj_visualization.py`**  
-  Interaktivni prikaz NJ drevesa z Matplotlib.  
-  Funkcionalnosti:
-  - drsnik za rezanje drevesa po razdalji  
-  - barvanje gruč  
-  - hover highlight (debelejši robovi, črne oznake)  
-  - dinamično posodabljanje prikaza  
-  - demo vizualizacija (20×20 sintetična matrika)
+  Interaktivni prikaz drevesa z Matplotlib.
+  - drsnik za rezanje drevesa po razdalji
+  - barvanje gruč
+  - hover poudarek
 
 #### `demos/`
 Primeri uporabe, ločeni od implementacije.
 
+- **`demo_synthetic_matrix.py`**  
+  Primer na sintetični matriki razdalj velikosti ```20x20```.
+
 - **`demo_orange_datasets.py`**  
-  Trije praktični prikazi:
-  - Iris: 15 primerkov iz vsakega razreda, evklidske razdalje  
-  - Zoo: Manhattan razdalje, oznake iz meta-polja *name*  
-  - Housing: prvih 60 vrstic, evklidske razdalje  
+  Prikaz delovanja na treh podatkovnih množicah dostopnih v Orange-u:
+  - Iris
+  - Zoo
+  - Housing
 
-  Vsak primer:
-  1. pripravi podatke  
-  2. izračuna razdalje (Euclidean / Manhattan / Hamming)  
-  3. generira NJ drevo  
-  4. prikaže interaktivno vizualizacijo  
+### Namestitev in uporaba
+Namestitev potrebnih knjižnic: ```pip install -r requirements.txt```
 
-#### Ostalo
+Zagon demo primerov: 
+- ```python demos/demo_synthetic_matrix.py```
+- ```python demos/demo_orange_datasets.py```
 
-- **`requirements.txt`**  
-  Seznam odvisnosti (numpy, matplotlib, Orange3, biopython, scikit-bio …)
+### Primer vizualizacije
 
-- **`.gitignore`**  
-  Izključitev virtualnega okolja, cache map in build artefaktov.
-
-- **`README.md`**  
-  Opis projekta, navodila za namestitev in zagon.
-
-## Namestitev
-
-```bash
-pip install -r requirements.txt
+![Vizualizacija NJ drevesa](images/tree_demo.png)
