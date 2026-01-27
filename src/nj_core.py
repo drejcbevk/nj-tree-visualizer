@@ -16,7 +16,7 @@ class TreeNode:
     children : list of child nodes (empty for leaves)
     """
 
-    __slots__ = ("name", "length", "children")
+    __slots__ = ("name", "length", "children", "_abs_height", "_dist_from_root")
 
     def __init__(self, name: Optional[str] = None, length: float = 0.0):
         self.name: Optional[str] = name
