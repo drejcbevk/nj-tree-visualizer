@@ -8,7 +8,7 @@ import numpy as np
 from AnyQt.QtCore import QPointF, QRectF, Qt, QSizeF, QEvent, Signal
 from AnyQt.QtGui import (
     QPainterPath, QPen, QBrush, QPalette, QPainterPathStroker, QColor,
-    QTransform, QFontMetrics, QPolygonF
+    QTransform, QFontMetrics, QPolygonF, QBrush
 )
 from AnyQt.QtWidgets import (
     QGraphicsWidget, QGraphicsPathItem, QGraphicsItemGroup,
@@ -177,6 +177,90 @@ def path_outline(path, width=1, join_style=Qt.RoundJoin):
 class DendrogramWidget(QGraphicsWidget):
     """A Graphics Widget displaying a dendrogram."""
 
+    class _LeafLabelItem(QGraphicsItemGroup):
+        """A label item anchored at a leaf end.
+
+        Draws a small colored rectangle (like TextListView's color strip)
+        followed by the label text.
+        """
+
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            self._rect = QGraphicsPathItem(self)
+            self._rect.setPen(make_pen(width=2, cosmetic=True))
+            self._rect.setBrush(QBrush(Qt.NoBrush))
+            self.addToGroup(self._rect)
+
+            self._text = QGraphicsSimpleTextItem(self)
+            self.addToGroup(self._text)
+
+            self._anchor = QPointF(0, 0)
+            self._selected = True
+            self._color = None  # type: Optional[QColor]
+
+        def set_anchor(self, p: QPointF) -> None:
+            self._anchor = QPointF(p)
+            self._relayout()
+
+        def set_text(self, text: str) -> None:
+            self._text.setText(text or "")
+            self._relayout()
+
+        def set_font(self, font) -> None:
+            self._text.setFont(font)
+            self._relayout()
+
+        def set_text_brush(self, brush) -> None:
+            self._text.setBrush(brush)
+
+        def set_bold(self, bold: bool) -> None:
+            f = self._text.font()
+            if f.bold() != bold:
+                f.setBold(bold)
+                self._text.setFont(f)
+                self._relayout()
+
+        def set_color(self, color: Optional[QColor], selected: bool = True) -> None:
+            self._color = QColor(color) if color is not None else None
+            self._selected = bool(selected)
+            self._update_rect_style()
+
+        def _update_rect_style(self) -> None:
+            if self._color is None:
+                self._rect.setVisible(False)
+                return
+
+            self._rect.setVisible(True)
+
+            pen_color = QColor(self._color)
+            pen_color.setAlpha(140)
+
+            self._rect.setPen(make_pen(pen_color, width=2, cosmetic=True))
+
+            if self._selected:
+                fill = QColor(self._color).lighter(140)
+                self._rect.setBrush(fill)
+            else:
+                self._rect.setBrush(QBrush(Qt.NoBrush))
+
+        def _relayout(self) -> None:
+            fm = QFontMetrics(self._text.font())
+            size = max(8, int(round(fm.height())))
+            margin = int(round(size * 0.2))
+            side = max(2, size - 2 * margin)
+            radius = 1
+
+            rpath = QPainterPath()
+            rpath.addRoundedRect(QRectF(margin, margin, side, side), radius, radius)
+            self._rect.setPath(rpath)
+
+            gap = 4
+            text_br = self._text.boundingRect()
+            baseline_y = self._anchor.y() - text_br.height() / 2.0
+
+            self._rect.setPos(self._anchor.x(), self._anchor.y() - size / 2.0)
+            self._text.setPos(self._anchor.x() + size + gap, baseline_y)
+
     class ClusterGraphicsItem(QGraphicsPathItem):
         #: The untransformed source path in 'dendrogram' logical coordinate
         #: system
@@ -290,10 +374,109 @@ class DendrogramWidget(QGraphicsWidget):
         self.__selectionMode = selectionMode
         self._pen_width = pen_width
         self._leaf_heights = bool(leaf_heights)
+        # Leaf-end labels (text + optional color rectangle)
+        self._leaf_labels = []
+        self._leaf_label_colors = None
+        self._leaf_label_selected = None
+        self._leaf_label_bold = None
+        self._leaf_label_items = []
+        self._reference_height = None
         self.setContentsMargins(0, 0, 0, 0)
         self.setRoot(root)
         if parent is not None:
             self.setParentItem(parent)
+
+    def set_reference_height(self, height: Optional[float]) -> None:
+        """Keep x-scale consistent by scaling against a fixed tree height."""
+        self._reference_height = float(height) if height is not None else None
+        self._rescale()
+
+    def set_leaf_labels(
+        self,
+        labels: List[str],
+        colors: Optional[List[Optional[QColor]]] = None,
+        selected: Optional[List[bool]] = None,
+        bold: Optional[List[bool]] = None,
+    ) -> None:
+        """Set leaf labels shown at the ends of leaf branches."""
+        self._leaf_labels = list(labels or [])
+        self._leaf_label_colors = list(colors) if colors is not None else None
+        self._leaf_label_selected = list(selected) if selected is not None else None
+        self._leaf_label_bold = list(bold) if bold is not None else None
+        self._ensure_leaf_label_items()
+        self._update_leaf_label_items()
+
+    def clear_leaf_labels(self) -> None:
+        self.set_leaf_labels([])
+
+    def _ensure_leaf_label_items(self) -> None:
+        scene = self.scene()
+        while len(self._leaf_label_items) > len(self._leaf_labels):
+            it = self._leaf_label_items.pop()
+            it.setParentItem(None)
+            if scene is not None:
+                scene.removeItem(it)
+        while len(self._leaf_label_items) < len(self._leaf_labels):
+            # Keep labels as top-level scene items so they can extend into the
+            # reserved label column (outside this widget's geometry).
+            it = DendrogramWidget._LeafLabelItem(None)
+            if scene is not None:
+                scene.addItem(it)
+            it.setZValue(1000)
+            self._leaf_label_items.append(it)
+
+    def _update_leaf_label_items(self) -> None:
+        if not self._leaf_label_items:
+            return
+        if self._root is None:
+            for it in self._leaf_label_items:
+                it.hide()
+            return
+
+        crect = self.contentsRect()
+        transform = getattr(self, "_transform", QTransform())
+        leaf_nodes = list(leaves(self._root))
+        if len(leaf_nodes) != len(self._leaf_labels):
+            for it in self._leaf_label_items:
+                it.hide()
+            return
+
+        scene = self.scene()
+        text_brush = self.palette().brush(QPalette.Text)
+        font = self.font()
+        for i, (node, text) in enumerate(zip(leaf_nodes, self._leaf_labels)):
+            item = self._items.get(node)
+            ll = self._leaf_label_items[i]
+            if scene is not None and ll.scene() is None:
+                scene.addItem(ll)
+            if item is None:
+                ll.hide()
+                continue
+
+            anchor = item.element.anchor
+            ap_local = transform.map(QPointF(anchor.x, anchor.y)) + crect.topLeft()
+            ap_scene = self.mapToScene(ap_local)
+
+            ll.show()
+            ll.set_text_brush(text_brush)
+            ll.set_font(font)
+            ll.set_text(text)
+            ll.setPos(ap_scene)
+            ll.set_anchor(QPointF(0, 0))
+
+            if self._leaf_label_bold is not None and i < len(self._leaf_label_bold):
+                ll.set_bold(bool(self._leaf_label_bold[i]))
+            else:
+                ll.set_bold(False)
+
+            if self._leaf_label_colors is not None and i < len(self._leaf_label_colors):
+                color = self._leaf_label_colors[i]
+                sel = True
+                if self._leaf_label_selected is not None and i < len(self._leaf_label_selected):
+                    sel = bool(self._leaf_label_selected[i])
+                ll.set_color(color, selected=sel)
+            else:
+                ll.set_color(None)
 
     def setSelectionMode(self, mode):
         """
@@ -351,6 +534,19 @@ class DendrogramWidget(QGraphicsWidget):
         self._selection = OrderedDict()
         self._highlighted_item = None
         self._cluster_parent = {}
+
+        # Leaf labels
+        scene = self.scene()
+        for it in getattr(self, "_leaf_label_items", []):
+            if scene is not None:
+                scene.removeItem(it)
+            else:
+                it.setParentItem(None)
+        self._leaf_label_items = []
+        self._leaf_labels = []
+        self._leaf_label_colors = None
+        self._leaf_label_selected = None
+        self._leaf_label_bold = None
         self.updateGeometry()
 
     def setRoot(self, root):
@@ -380,6 +576,7 @@ class DendrogramWidget(QGraphicsWidget):
 
             self._relayout()
             self._rescale()
+            self._update_leaf_label_items()
         self.updateGeometry()
     set_root = setRoot
 
@@ -663,28 +860,125 @@ class DendrogramWidget(QGraphicsWidget):
             vert = []
             for it in itemsleft[1:]:
                 vert.extend([
-                    it.element.path[0], 
-                    it.element.path[1],   
+                    it.element.path[0],
+                    it.element.path[1],
                     it.element.anchor
                 ])
             for it in itemsright[:-1]:
                 vert.extend([
                     it.element.anchor,
-                    it.element.path[-2], 
+                    it.element.path[-2],
                     it.element.path[-1]
                 ])
 
-            # maximum x-coordinate among all leaves in the subtree
-            leaf_items = [self._items[leaf] for leaf in leaves(item.node)]
-            max_x = max(li.element.anchor.x for li in leaf_items)
+            # --- extend selection to cover leaf labels (if present) ---
             top = vert[0]
             bottom = vert[-1]
-            top_ext = Point(max_x, top.y)
-            bottom_ext = Point(max_x, bottom.y)
+            x_top_leaf = top.x
+            x_bottom_leaf = bottom.x
 
+            leaf_nodes = list(leaves(item.node))
+            leaf_items = [self._items[leaf] for leaf in leaf_nodes]
+            max_x_anchor = max(li.element.anchor.x for li in leaf_items)
+
+            x_right = max_x_anchor
+            y_top_label = top.y
+            y_bottom_label = bottom.y
+
+            if getattr(self, "_leaf_label_items", None) and self._leaf_label_items:
+                all_leaves = list(leaves(self._root)) if self._root else []
+                leaf_to_idx = {leaf: i for i, leaf in enumerate(all_leaves)}
+
+                crect = self.contentsRect()
+                tinv, ok = self._transform.inverted()
+
+                if ok:
+                    # Compute (in dendrogram coords) the min label-top, max label-bottom,
+                    # and max label-right among leaves in this selected cluster.
+                    y_top_candidates = []
+                    y_bottom_candidates = []
+                    x_right_candidates = []
+
+                    for leaf in leaf_nodes:
+                        idx = leaf_to_idx.get(leaf)
+                        if idx is None or idx >= len(self._leaf_label_items):
+                            continue
+
+                        ll = self._leaf_label_items[idx]
+                        if ll is None or not ll.isVisible():
+                            continue
+
+                        sb = ll.mapToScene(ll.childrenBoundingRect()).boundingRect()
+                        tl = self.mapFromScene(sb.topLeft())
+                        br = self.mapFromScene(sb.bottomRight())
+
+                        tl_d = tinv.map(tl - crect.topLeft())
+                        br_d = tinv.map(br - crect.topLeft())
+
+                        y_top_candidates.append(tl_d.y())
+                        y_bottom_candidates.append(br_d.y())
+                        x_right_candidates.append(br_d.x())
+
+                    if y_top_candidates and y_bottom_candidates and x_right_candidates:
+                        y_top_label = min(y_top_candidates)
+                        y_bottom_label = max(y_bottom_candidates)
+                        x_right = max(max_x_anchor, max(x_right_candidates))
+
+                    # --- clamp label-extended span to avoid overlap with neighbors ---
+                    if all_leaves and len(all_leaves) >= 2:
+                        n = len(all_leaves)
+
+                        tops = [None] * n
+                        bottoms = [None] * n
+
+                        for i in range(min(n, len(self._leaf_label_items))):
+                            ll = self._leaf_label_items[i]
+                            if ll is None or not ll.isVisible():
+                                leaf_item = self._items.get(all_leaves[i])
+                                if leaf_item is not None:
+                                    ay = leaf_item.element.anchor.y
+                                    tops[i] = ay
+                                    bottoms[i] = ay
+                                continue
+
+                            sb = ll.mapToScene(ll.childrenBoundingRect()).boundingRect()
+                            tl = self.mapFromScene(sb.topLeft())
+                            br = self.mapFromScene(sb.bottomRight())
+                            tl_d = tinv.map(tl - crect.topLeft())
+                            br_d = tinv.map(br - crect.topLeft())
+                            tops[i] = tl_d.y()
+                            bottoms[i] = br_d.y()
+
+                        for i in range(n):
+                            if tops[i] is None or bottoms[i] is None:
+                                leaf_item = self._items.get(all_leaves[i])
+                                ay = leaf_item.element.anchor.y if leaf_item is not None else 0.0
+                                tops[i] = ay
+                                bottoms[i] = ay
+
+                        dividers = [(bottoms[i] + tops[i + 1]) / 2.0 for i in range(n - 1)]
+
+                        first = int(item.node.value.first)
+                        last = int(item.node.value.last) - 1
+
+                        if first > 0:
+                            top_limit = dividers[first - 1]
+                        else:
+                            top_limit = tops[0] - (dividers[0] - tops[0])
+                        if last < n - 1:
+                            bottom_limit = dividers[last]
+                        else:
+                            bottom_limit = bottoms[-1] + (bottoms[-1] - dividers[-1])
+
+                        y_top_label = max(y_top_label, top_limit)
+                        y_bottom_label = min(y_bottom_label, bottom_limit)
+
+            # close the polygon
             vert.extend([
-                bottom_ext,
-                top_ext,
+                Point(x_bottom_leaf, y_bottom_label),
+                Point(x_right, y_bottom_label),
+                Point(x_right, y_top_label),
+                Point(x_top_leaf, y_top_label),
                 top
             ])
 
@@ -692,8 +986,7 @@ class DendrogramWidget(QGraphicsWidget):
                 return abs(a - b) < rel_tol * max(abs(a), abs(b))
 
             def isclose_p(p1, p2, rel_tol=1e-6):
-                return isclose(p1.x, p2.x, rel_tol) and \
-                       isclose(p1.y, p2.y, rel_tol)
+                return isclose(p1.x, p2.x, rel_tol) and isclose(p1.y, p2.y, rel_tol)
 
             acc = [vert[0]]
             for v in vert[1:]:
@@ -703,22 +996,20 @@ class DendrogramWidget(QGraphicsWidget):
 
         return QPolygonF([QPointF(*p) for p in vert])
 
-    def _update_selection_items(self):
-        """Update the shapes of selection items after a scale change.
-        """
+    def _update_selection_items(self, recompute_outline: bool = False):
+        """Update the shapes of selection items after a scale/font/label change."""
         transform = self._transform
         for item, selection in self._selection.items():
+            if recompute_outline:
+                selection.unscaled_path = self._selection_poly(item)
             path = transform.map(selection.unscaled_path)
             ppath = self._create_path(item, path)
             selection.set_path(ppath)
 
     def _height_scale_factor(self):
-        # Internal dendrogram height scale factor. The dendrogram geometry is
-        # scaled by this factor to better condition the geometry
         if self._root is None:
             return 1
-        base = self._root.value.height
-        # implicitly scale the geometry to 0..1 scale or flush to 0 for fuzz
+        base = self._reference_height if self._reference_height is not None else self._root.value.height
         if base >= np.finfo(base).eps:
             return 1 / base
         else:
@@ -797,6 +1088,7 @@ class DendrogramWidget(QGraphicsWidget):
             )
         self._selection_items = None
         self._update_selection_items()
+        self._update_leaf_label_items()
 
     def sizeHint(self, which: Qt.SizeHint, constraint=QSizeF()) -> QSizeF:
         # reimplemented
@@ -870,8 +1162,11 @@ class DendrogramWidget(QGraphicsWidget):
         super().changeEvent(event)
         if event.type() == QEvent.FontChange:
             self.updateGeometry()
+            self._update_leaf_label_items()
+            self._update_selection_items(recompute_outline=True)
         elif event.type() == QEvent.PaletteChange:
             self._update_colors()
+            self._update_leaf_label_items()
         elif event.type() == QEvent.ContentsRectChange:
             self._rescale()
 

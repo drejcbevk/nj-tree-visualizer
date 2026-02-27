@@ -383,7 +383,6 @@ class OWNeighborJoining(widget.OWWidget):
         self._main_graphics.setLayout(scenelayout)
         self.scene.addItem(self._main_graphics)
         self.view.setCentralWidget(self._main_graphics)
-        self.scene.addItem(self._main_graphics)
 
         self.dendrogram = DendrogramWidget(pen_width=2, leaf_heights=True)
         self.dendrogram.setSizePolicy(QSizePolicy.MinimumExpanding,
@@ -396,7 +395,6 @@ class OWNeighborJoining(widget.OWWidget):
         self.labels.setModel(self.label_model)
         self.labels.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Preferred)
         self.labels.setAlignment(Qt.AlignLeft)
-        self.labels.setMaximumWidth(200)
 
         scenelayout.addItem(self.top_axis, 0, 0,
                             alignment=Qt.AlignLeft | Qt.AlignVCenter)
@@ -527,10 +525,13 @@ class OWNeighborJoining(widget.OWWidget):
     def _clear_plot(self):
         self.dendrogram.set_root(None)
         self.label_model.clear()
+        # clear leaf-end labels
+        self.dendrogram.clear_leaf_labels()
 
     def _set_displayed_root(self, root):
         self._clear_plot()
         self._displayed_root = root
+        self.dendrogram.set_reference_height(self.root.value.height if self.root else None)
         self.dendrogram.set_root(root)
         self._update_labels()
 
@@ -636,21 +637,38 @@ class OWNeighborJoining(widget.OWWidget):
 
                 labels = new_labels
 
-        self.label_model[:] = labels
-        self.label_model.set_subset(set() if self.pruning else self.subset_rows)
-        self.labels.setMinimumWidth(1 if labels else -1)
-
-        if not self.pruning and self.color_by is not None:
+        # Compute per-leaf colors (for the small rectangle) and subset bold mask
+        colors = None
+        if not self.pruning and self.color_by is not None and labels:
             col = self.items.get_column(self.color_by)
-            self.label_model.set_colors(
-                self.color_by.palette.values_to_qcolors(col[indices]))
+            colors = list(self.color_by.palette.values_to_qcolors(col[indices]))
+
+        subset = set() if self.pruning else (self.subset_rows or set())
+        bold_mask = [i in subset for i in range(len(labels))] if labels else []
+
+        # Show labels at the end of leaf branches in the dendrogram
+        if labels:
+            selected_mask = bold_mask if subset else None
+            self.dendrogram.set_leaf_labels(labels, colors=colors,
+                                            selected=selected_mask,
+                                            bold=bold_mask)
         else:
-            self.label_model.set_colors(None)
+            self.dendrogram.clear_leaf_labels()
+
+
+        # Always use the stored width (also when pruned), so it never shrinks
+        reserve = 200
+        self.labels.setMinimumWidth(reserve)
+        self.labels.setMaximumWidth(reserve)
+
+        self.label_model.set_subset(set())
+        self.label_model.set_colors(None)
 
 
     def _set_selected_nodes(self, selection):
         # type: (List[Tree]) -> None
         """
+        TextListViewNpornhub.com
         Set the nodes in `selection` to be the current selected nodes.
 
         The selection nodes must be subtrees of the current `_displayed_root`.

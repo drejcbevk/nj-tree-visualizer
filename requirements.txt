@@ -3,3 +3,4 @@ matplotlib
 Orange3
 scikit-bio
 biopython
+PyQt5
